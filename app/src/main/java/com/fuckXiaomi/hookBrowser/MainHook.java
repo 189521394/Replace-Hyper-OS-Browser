@@ -2,13 +2,19 @@ package com.fuckXiaomi.hookBrowser;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.Icon;
 import android.net.Uri;
+import android.os.Bundle;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 
-import android.os.Bundle;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XC_MethodReplacement;
@@ -18,18 +24,20 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public class MainHook implements IXposedHookLoadPackage {
     
+    // 极简配置文件路径
+    private static final String CONFIG_PATH = "/data/local/tmp/browser.txt";
+    
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
         if (!lpparam.packageName.equals("com.xiaomi.aicr")) {
             return;
         }
         
-        XposedBridge.log("成功注入小米AI识别进程！(修复Binder死锁极简版)");
-        
+        XposedBridge.log("成功注入小米AI识别进程！(纯净极简版)");
         String targetClass = "com.xiaomi.aicr.copydirect.util.SmartPasswordUtils";
         
         // ========================================================
-        // 1. 核心拦截：只在这个最终方法里“偷梁换柱”
+        // 1. 核心拦截：替换 Intent 的目标包名
         // ========================================================
         XposedHelpers.findAndHookMethod(
                 targetClass,
@@ -44,7 +52,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         String str = (String) param.args[1];
                         
                         Intent intent = new Intent("android.intent.action.VIEW");
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // 268435456
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         intent.putExtra("open_source", "clipboard_open");
                         
                         if (str.startsWith("http")) {
@@ -55,7 +63,6 @@ public class MainHook implements IXposedHookLoadPackage {
                         
                         // 动态读取你的配置文件
                         String userBrowserPkg = getCustomBrowserPkg();
-                        
                         if (userBrowserPkg != null && !userBrowserPkg.isEmpty()) {
                             intent.setPackage(userBrowserPkg);
                             XposedBridge.log("已强行注入目标浏览器: " + userBrowserPkg);
@@ -77,86 +84,60 @@ public class MainHook implements IXposedHookLoadPackage {
                 lpparam.classLoader,
                 "isInstallForApp",
                 Context.class,
-                String.class, // 注意：这里拦截的是带有 String 的两个参数的方法！
+                String.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         String pkgName = (String) param.args[1];
-                        // 只要引擎想检查官方浏览器，立马回答"安装了"，阻止底层发起通信！
                         if ("com.android.browser".equals(pkgName)) {
                             param.setResult(true);
                         }
                     }
                 }
         );
+        
         // ========================================================
         // 3. 在通知发送前的最后一刻，替换掉包裹里的图标！
         // ========================================================
         XposedHelpers.findAndHookMethod(
-                "android.app.NotificationManager", // 拦截安卓原生的通知管理器
+                "android.app.NotificationManager",
                 lpparam.classLoader,
                 "notify",
                 int.class,
-                android.app.Notification.class, // 拦截发送的 Notification 对象
+                android.app.Notification.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         int id = (int) param.args[0];
                         android.app.Notification notification = (android.app.Notification) param.args[1];
                         
-                        // 111 是我们在小米源码里看到的 NOTIFICATION_ID
-                        // 只有是这个 ID 的通知，我们才去插手，避免影响系统其他正常通知
-                        if (id == 111 && notification != null) {
-                            
-                            // 为了确认这确实是复制网址的通知，我们可以检查它的 extras
+                        if (id == 111 && notification != null && notification.extras != null) {
                             Bundle extras = notification.extras;
-                            if (extras != null && extras.getString("copyText") != null) {
-                                
+                            
+                            // 确认是复制网址的通知
+                            if (extras.getString("copyText") != null) {
                                 String customPkg = getCustomBrowserPkg();
-                                if (customPkg != null && !customPkg.isEmpty()) {
-                                    try {
-                                        // 1. 获取第三方浏览器的真实应用图标
-                                        // 注意这里的获取上下文可能有点绕，如果报错，我们可以传入固定的包名或者不获取
-                                        // 由于这个 Hook 是在当前进程触发的，我们可以借用 AndroidAppHelper
-                                        android.content.Context context = android.app.AndroidAppHelper.currentApplication();
-                                        android.content.pm.PackageManager pm = context.getPackageManager();
-                                        android.graphics.drawable.Drawable customAppIcon = pm.getApplicationIcon(customPkg);
-                                        
-                                        // 2. 转换为 Bitmap
-                                        android.graphics.Bitmap bitmap = null;
-                                        if (customAppIcon instanceof android.graphics.drawable.BitmapDrawable) {
-                                            bitmap = ((android.graphics.drawable.BitmapDrawable) customAppIcon).getBitmap();
-                                        } else {
-                                            int width = Math.max(customAppIcon.getIntrinsicWidth(), 1);
-                                            int height = Math.max(customAppIcon.getIntrinsicHeight(), 1);
-                                            bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888);
-                                            android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
-                                            customAppIcon.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
-                                            customAppIcon.draw(canvas);
-                                        }
-                                        
-                                        // 3. 转换为 Icon 对象
-                                        android.graphics.drawable.Icon newIcon = android.graphics.drawable.Icon.createWithBitmap(bitmap);
-                                        
-                                        // 4. 暴力替换通知里的所有关键图标！
-                                        // 替换小图标 (Small Icon)
-                                        XposedHelpers.setObjectField(notification, "mSmallIcon", newIcon);
-                                        // 替换大图标 (Large Icon)
-                                        XposedHelpers.setObjectField(notification, "mLargeIcon", newIcon);
-                                        
-                                        // 替换小米特有的 Bundle 里的图标 (这是小米用来显示在胶囊或悬浮泡上的)
-                                        extras.putParcelable("miui.appIcon", newIcon);
-                                        Bundle miuiFocusPics = extras.getBundle("miui.focus.pics");
-                                        if (miuiFocusPics != null) {
-                                            miuiFocusPics.putParcelable("miui.focus.pic_image", newIcon);
-                                            miuiFocusPics.putParcelable("miui.land.pic_image", newIcon);
-                                        }
-                                        
-                                        XposedBridge.log("成功替换通知栏悬浮窗图标为: " + customPkg);
-                                        
-                                    } catch (Exception e) {
-                                        XposedBridge.log("替换图标失败: " + e.getMessage());
+                                if (customPkg == null || customPkg.isEmpty()) return;
+                                
+                                try {
+                                    Context context = android.app.AndroidAppHelper.currentApplication();
+                                    Icon newIcon = getCustomAppIcon(context, customPkg);
+                                    
+                                    // 暴力替换通知里的所有关键图标！
+                                    XposedHelpers.setObjectField(notification, "mSmallIcon", newIcon);
+                                    XposedHelpers.setObjectField(notification, "mLargeIcon", newIcon);
+                                    
+                                    // 替换小米特有的 Bundle 里的图标
+                                    extras.putParcelable("miui.appIcon", newIcon);
+                                    Bundle miuiFocusPics = extras.getBundle("miui.focus.pics");
+                                    if (miuiFocusPics != null) {
+                                        miuiFocusPics.putParcelable("miui.focus.pic_image", newIcon);
+                                        miuiFocusPics.putParcelable("miui.land.pic_image", newIcon);
                                     }
+                                    
+                                    XposedBridge.log("成功替换通知栏悬浮窗图标为: " + customPkg);
+                                } catch (Exception e) {
+                                    XposedBridge.log("替换图标失败: " + e.getMessage());
                                 }
                             }
                         }
@@ -165,9 +146,15 @@ public class MainHook implements IXposedHookLoadPackage {
         );
     }
     
-    // 纯文本文件读取逻辑
+    // ========================================================
+    // 工具方法区
+    // ========================================================
+    
+    /**
+     * 读取单行纯文本配置文件
+     */
     private String getCustomBrowserPkg() {
-        File configFile = new File("/data/local/tmp/mi_browser_hook.txt");
+        File configFile = new File(CONFIG_PATH);
         if (configFile.exists() && configFile.canRead()) {
             try (BufferedReader br = new BufferedReader(new FileReader(configFile))) {
                 String line = br.readLine();
@@ -179,5 +166,27 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         }
         return "";
+    }
+    
+    /**
+     * 获取第三方应用的 Icon 对象 (封装了 Drawable 转 Bitmap 的逻辑)
+     */
+    private Icon getCustomAppIcon(Context context, String pkgName) throws PackageManager.NameNotFoundException {
+        PackageManager pm = context.getPackageManager();
+        Drawable customAppIcon = pm.getApplicationIcon(pkgName);
+        
+        Bitmap bitmap;
+        if (customAppIcon instanceof BitmapDrawable) {
+            bitmap = ((BitmapDrawable) customAppIcon).getBitmap();
+        } else {
+            // 兼容矢量图或自适应图标的绘制
+            int width = Math.max(customAppIcon.getIntrinsicWidth(), 1);
+            int height = Math.max(customAppIcon.getIntrinsicHeight(), 1);
+            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            customAppIcon.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+            customAppIcon.draw(canvas);
+        }
+        return Icon.createWithBitmap(bitmap);
     }
 }

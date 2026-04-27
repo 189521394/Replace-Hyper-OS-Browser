@@ -6,7 +6,7 @@
             android:allowBackup="true"
             android:fullBackupContent="@xml/backup_rules"
             android:dataExtractionRules="@xml/data_extraction_rules"
-            android:label="自定义灵动岛快速跳转使用的浏览器"
+            android:label="Replace Island Browser"
             android:supportsRtl="true"
             android:theme="@style/Theme.ReplaceBrowser">
 
@@ -16,7 +16,11 @@
 
         <meta-data
                 android:name="xposeddescription"
-                android:value="自定义灵动岛快速跳转使用的浏览器" />
+                android:value="Replace the default browser of Hyper OS Dynamic Island." />
+
+        <meta-data
+                android:name="xposedscope"
+                android:value="com.xiaomi.aicr" />
 
         <meta-data
                 android:name="xposedminversion"
